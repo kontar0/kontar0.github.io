@@ -46,6 +46,11 @@ PUSH s_SuperPass_00403000        ; the input is compared against this string</co
 <h2>Takeaway</h2>
 <p>The useful part was not the answer but the method. Data has no meaning on its own: three strings look identical in the listing, and only the API that consumes each one reveals its role. This was also my first practice with Ghidra: following cross-references, renaming variables, and reading Windows API calls.</p>
 
+<h2>Additional info</h2>
+<p>I found another crackme with the same task. That one still had its symbols, so the variable holding the reference value was literally named pass and the password was visible immediately: simba123.</p>
+<p>The difference is worth noting. Here the binary was stripped, so Ghidra had to invent names from addresses. There the names came from the binary itself. Same logic, very different amount of work.</p>
+<p>The other crackme: https://crackmes.one/crackme/6a160c2a2b3df128c1df5cc1</p>
+
 <a class="back" href="../index.html">← all writeups</a>
 
 </div>
