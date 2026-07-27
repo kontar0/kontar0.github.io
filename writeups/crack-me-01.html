@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CrackMe 01 — MASM password check — Konstantin Tarasenko</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<h1 class="title">CrackMe 01 — MASM password check</h1>
+
+<dl class="meta">
+  <dt>source</dt><dd><a href="https://crackmes.one/crackme/6943c5440992a052ab22240f">CosmoSSS's Password(Very Easy)</a></dd>
+  <dt>platform</dt><dd>Windows</dd>
+  <dt>architecture</dt><dd>x86</dd>
+  <dt>bitness</dt><dd>32-bit</dd>
+  <dt>format</dt><dd>PE32</dd>
+  <dt>written in</dt><dd>MASM (hand-written assembly)</dd>
+  <dt>difficulty</dt><dd>easy</dd>
+  <dt>tools</dt><dd>Ghidra</dd>
+  <dt>approach</dt><dd>static only, binary never executed</dd>
+  <dt>date</dt><dd>2026-07-26</dd>
+</dl>
+
+<h2>First look at the binary</h2>
+<p>The binary is a 32-bit x86 PE. The .text section is 512 bytes, of which 296 are actual code. The .data section holds three strings.</p>
+<figure>
+  <img src="../images/text-section.png" alt="Ghidra shows the .text section" loading="lazy">
+  <figcaption>Ghidra shows the .text section</figcaption>
+</figure>
+
+<h2>Finding the check</h2>
+<p>The program has three strings in .data. At first I assumed all three were output messages. Nothing in the data itself says which is which. </p>
+<p>The role comes from the consumer. I checked which API receives each string. Two of them are pushed to MessageBoxA, so they are output text. The third one is pushed to lstrcmpA, so it is the value the input is compared against.</p>
+<p>The imports made this easy to locate: GetDlgItemTextA reads the input field, lstrcmpA compares strings.</p>
+<pre><code>CALL USER32.DLL::GetDlgItemTextA ; four parameters, the third is the destination buffer
+--------------------------
+LEA EAX,[EBP + 0xfffffefc]
+PUSH EAX                         ; the same buffer, so it holds the user input
+--------------------------
+PUSH s_SuperPass_00403000        ; the input is compared against this string</code></pre>
+
+<h2>Result</h2>
+<p>So s_SuperPass_00403000 holds the password.</p>
+<pre><code>SuperPass</code></pre>
+
+<h2>Takeaway</h2>
+<p>The useful part was not the answer but the method. Data has no meaning on its own: three strings look identical in the listing, and only the API that consumes each one reveals its role. This was also my first practice with Ghidra: following cross-references, renaming variables, and reading Windows API calls.</p>
+
+<a class="back" href="../index.html">← all writeups</a>
+
+</div>
+</body>
+</html>

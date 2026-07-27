@@ -1,0 +1,6 @@
+site-builder-local/
+builder/
+project.json
+PRODUCT.md
+writeups/.builder-backup-*/
+.DS_Store
