@@ -17,7 +17,7 @@
   <dt>bitness</dt><dd>32-bit</dd>
   <dt>format</dt><dd>PE32</dd>
   <dt>written in</dt><dd>MASM (hand-written assembly)</dd>
-  <dt>difficulty</dt><dd>easy</dd>
+  <dt>difficulty</dt><dd>very easy</dd>
   <dt>tools</dt><dd>Ghidra</dd>
   <dt>approach</dt><dd>static only, binary never executed</dd>
   <dt>date</dt><dd>2026-07-26</dd>
@@ -31,9 +31,7 @@
 </figure>
 
 <h2>Finding the check</h2>
-<p>The program has three strings in .data. At first I assumed all three were output messages. Nothing in the data itself says which is which. </p>
-<p>The role comes from the consumer. I checked which API receives each string. Two of them are pushed to MessageBoxA, so they are output text. The third one is pushed to lstrcmpA, so it is the value the input is compared against.</p>
-<p>The imports made this easy to locate: GetDlgItemTextA reads the input field, lstrcmpA compares strings.</p>
+<p>The program has three strings in .data. At first I assumed all three were output messages. Nothing in the data itself says which is which. The role comes from the consumer. I checked which API receives each string. Two of them are pushed to MessageBoxA, so they are output text. The third one is pushed to lstrcmpA, so it is the value the input is compared against. The imports made this easy to locate: GetDlgItemTextA reads the input field, lstrcmpA compares strings.</p>
 <pre><code>CALL USER32.DLL::GetDlgItemTextA ; four parameters, the third is the destination buffer
 --------------------------
 LEA EAX,[EBP + 0xfffffefc]
