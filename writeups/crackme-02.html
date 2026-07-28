@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CrackMe 02 - I need to be honest — Konstantin Tarasenko</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+<h1 class="title">CrackMe 02 - I need to be honest</h1>
+
+<dl class="meta">
+  <dt>source</dt><dd><a href="https://crackmes.one/crackme/69cd43df49fa49a2a2602312">pipedown's I need to be honest</a></dd>
+  <dt>platform</dt><dd>Linux</dd>
+  <dt>architecture</dt><dd>x86</dd>
+  <dt>bitness</dt><dd>64-bit</dd>
+  <dt>format</dt><dd>ELF64</dd>
+  <dt>written in</dt><dd>Assembly</dd>
+  <dt>difficulty</dt><dd>very easy</dd>
+  <dt>tools</dt><dd>Ghidra</dd>
+  <dt>approach</dt><dd>mostly static</dd>
+  <dt>date</dt><dd>2026-07-28</dd>
+</dl>
+
+<h2>First look at the binary</h2>
+<p>Statically linked 64-bit ELF, hand-written assembly, not stripped. All symbol names are present.</p>
+<p>The strings in .data have no null terminator, so Ghidra did not mark them as strings and left them as raw bytes.</p>
+
+<h2>Finding the check</h2>
+<p>The password check is a loop with a counter.</p>
+<p>AL holds the input byte, BL the reference byte, compared directly. The counter runs to 27, then the code jumps to verify_checksum.</p>
+<p>Since the string has no terminator, cmp rcx, 0x1b is the only place the length exists. Marking those 27 bytes as a string gives SecurePass_2k26_X64_Reverse.</p>
+<pre><code>password_verify_loop:
+    CMP    RCX, 0x1b                        ; counter against 27
+    JGE    verify_checksum
+    MOV    AL, byte ptr [RCX + input_buffer] ; byte of user input
+    MOV    RBX, actual_password
+    MOV    BL, byte ptr [RBX + RCX*0x1]      ; byte of the real password
+    CMP    AL, BL
+    JNZ    stage_fail
+    MOVZX  RAX, AL
+    ADD    R8, RAX                           ; accumulate the sum
+    INC    RCX
+    JMP    password_verify_loop</code></pre>
+
+<h2>How the verification works</h2>
+<p>Two stages: byte-by-byte comparison, then a checksum of the accumulated sum.</p>
+<p>The second stage is redundant. If all 27 bytes matched, the sum matches by definition, so the checksum can never fail.</p>
+<p>The flags are then XOR-decrypted and printed. The keys are hardcoded in the instructions right before each call: 0x47, 0x5A, 0x6C.</p>
+
+<h2>Unused parts</h2>
+<p>magic1, magic2, magic3 are hexspeak constants (0xDEADBEEFCAFEBABE, 0xFEEDFACEDEADC0DE, 0xACCEFADEDEADBEEF). They look like intended XOR keys, but nothing references them.</p>
+<p>password_product is the same: the value is stored, nothing reads it.</p>
+
+<h2>Result</h2>
+<pre><code>Password: SecurePass_2k26_X64_Reverse
+
+Flags:
+CRYPTO_KEY_ALPHA_2026
+REVERSE_ENGINEERING_CHALLENGE
+MEMORY_HIDDEN_GAMMA_X64</code></pre>
+<figure>
+  <img src="../images/pass-and-flags.png" alt="Result in terminal" loading="lazy">
+  <figcaption>Result in terminal</figcaption>
+</figure>
+
+<h2>Takeaway</h2>
+<p>A program can look more protected than it is. The verification has two stages but only the first one does anything, and part of the data is never touched at all.</p>
+
+<a class="back" href="../index.html">← all writeups</a>
+
+</div>
+</body>
+</html>
