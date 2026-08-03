@@ -24,12 +24,15 @@
 </dl>
 
 <h2>The target</h2>
-<p><code>iOSCrackme.ipa</code> is an ordinary ZIP archive. Unpacking it gives <code>Payload/iOSCrackme.app/iOSCrackme</code>, a 99 KB ARM64 Mach-O. <code>LC_ENCRYPTION_INFO_64</code> carries <code>cryptid = 0</code>, so the binary is not FairPlay-encrypted and can be read straight off disk. A copy pulled from the App Store would have needed a jailbroken device and a memory dump first.</p>
-<p><code>libobjc.A.dylib</code> is linked and <code>libswiftCore</code> is not, so this is Objective-C. Two consequences run through everything below: method names survive in the binary as plain text, because the runtime dispatches by name, and every method carries two implicit arguments, <code>self</code> in <code>x0</code> and <code>_cmd</code> in <code>x1</code>, which puts the first real argument in <code>x2</code>.</p>
+<p><code>iOSCrackme.ipa</code> is an ordinary ZIP archive. Unpacking it gives <code>Payload/iOSCrackme.app/iOSCrackme</code>, a 99 KB ARM64 Mach-O.</p>
+<p>Two facts from the load commands decided the whole approach. <code>LC_ENCRYPTION_INFO_64</code> carries <code>cryptid = 0</code>, so the binary is not FairPlay-encrypted and can be read straight off disk. A copy pulled from the App Store would have required a jailbroken device and a memory dump before any of this was possible.</p>
+<p>The dylib list contains <code>libobjc.A.dylib</code> and no <code>libswiftCore</code>, which makes this Objective-C rather than Swift. That matters more than it sounds. Objective-C resolves method calls at runtime by name, so nearly every call goes through <code>objc_msgSend</code> and the static call graph collapses into a single hub. The flip side is that method names have to survive in the binary as plain text, because the runtime needs them to dispatch.</p>
+<p>One convention is worth stating up front, because every listing below depends on it. An Objective-C method receives two implicit arguments, <code>self</code> in <code>x0</code> and the selector <code>_cmd</code> in <code>x1</code>. The first real argument arrives in <code>x2</code>. That is why each of these methods opens with <code>mov x0, x2</code>.</p>
 
 <h2>Finding the check</h2>
-<p>The strings gave up only the UI status texts <code>CORRECT</code> and <code>WRONG</code>, which was enough: a result string implies a function that displays it, and cross-references from there lead back into the check.</p>
-<p>From then on I navigated by Ghidra's Symbol Tree, which lists Objective-C classes as namespaces. <code>KeyValidator</code> held exactly six methods, and the naming gave away the shape of the problem before a single instruction was read.</p>
+<p>The first pass was over the strings. The only interesting entries were the UI status texts <code>CORRECT</code> and <code>WRONG</code>, which felt thin at the time. It was enough: a result string implies a function that displays it, and cross-references from there lead back into the check. That is how I first reached the validation code.</p>
+<p>After that I switched to Ghidra's Symbol Tree, which lists Objective-C classes as namespaces, and stopped navigating any other way. Class and method names had survived, so browsing the list was simply faster. That convenience was incidental. Had the binary been stripped, the route through the result strings would still have worked, with a renamed function or Ghidra's auto-generated label standing in for the real name.</p>
+<p><code>KeyValidator</code> held exactly six methods, and the naming gave away the shape of the problem before a single instruction was read.</p>
 <pre><code>+[KeyValidator validate:]
 +[KeyValidator stage1_length:]
 +[KeyValidator stage2_structure:]
@@ -43,7 +46,7 @@
 
 <h2>How the comparison works</h2>
 <p><code>validate:</code> is a short-circuit chain. Each stage is called in turn and its result tested with <code>cbz</code>, and any failure jumps straight to the common exit and returns 0.</p>
-<p>This is what made the crackme tractable. The five constraints are independent, so they can be attacked one at a time in any order.</p>
+<p>This structure is what made the crackme tractable. The five constraints are independent, none of them depends on the result of another, and they can be attacked one at a time in any order. It also means the check leaks information through timing, since a wrong prefix returns several calls earlier than a wrong checksum, though I did not need that here.</p>
 <pre><code>bl  _objc_msgSend$stage1_length:
 cbz w0, fail
 bl  _objc_msgSend$stage2_structure:
@@ -56,8 +59,9 @@ bl  _objc_msgSend$stage5_rollingHash:</code></pre>
 
 <h2>Stage 4, and the assumption that cost the most</h2>
 <p>I started with <code>stage4_xorBlob:</code>, because the name suggested this was where the password gets decrypted. The assumption was simple: recover this one algorithm and the key falls out of it.</p>
-<p>Each iteration fetches a character, XORs it with a key derived from the loop counter, and compares the result against a byte from a twelve-entry table at <code>0x100009221</code>: <code>EA 9E EF 82 E8 88 E8 81 99 FE 82 E6</code>. The XOR key is not constant. It is <code>index + 0xAC</code>, so every position uses a different one, which is what keeps the table from reading as text.</p>
-<p>I inverted the transform in Python, got a clean twelve-character string, and typed it into the app. Rejected.</p>
+<p>The loop itself is not complicated. For each iteration it fetches a character from the input, XORs it with a key derived from the loop counter, and compares the result against a byte from a table. The XOR key is not constant. It is <code>index + 0xAC</code>, so every position uses a different one, which is what keeps the table from being readable as text.</p>
+<p>The reference table sits at <code>0x100009221</code> and holds twelve bytes: <code>EA 9E EF 82 E8 88 E8 81 99 FE 82 E6</code>.</p>
+<p>I wrote a short Python script inverting the transform, got a clean twelve-character string out of it, and typed that into the app. Rejected.</p>
 <pre><code>add  x2, x21, #4
 bl   _objc_msgSend$characterAtIndex:
 add  w8, w21, #0xac
@@ -67,13 +71,14 @@ ldrb w10, [x8, #1]
 cmp  w10, w9, uxtb</code></pre>
 
 <h2>Stage 1 and 2, the layout</h2>
-<p><code>stage1_length:</code> explains the rejection in three instructions: <code>cmp x0, #0x11</code>, so the key is 17 characters. My result was twelve, a fragment rather than the answer.</p>
-<p><code>stage2_structure:</code> then fixes the shape of those 17:</p>
+<p><code>stage1_length:</code> explains the rejection in three instructions: <code>cmp x0, #0x11</code>, so the key is 17 characters. My result was twelve. It was a fragment, not the answer.</p>
+<p><code>stage2_structure:</code> then fixes the shape of those 17 characters:</p>
 <ul>
   <li><code>substringToIndex:3</code> must equal the constant string <code>CM-</code></li>
   <li><code>characterAtIndex:7</code> and <code>characterAtIndex:12</code> must both be <code>0x2D</code>, an ASCII hyphen</li>
-  <li>every other character must be alphanumeric, except at positions held in a constant <code>NSArray</code>, which resolves through <code>__objc_arraydata</code> into <code>__objc_intobj</code> as 0, 1, 2, 7 and 12</li>
+  <li>every remaining character must belong to <code>NSCharacterSet.alphanumericCharacterSet</code></li>
 </ul>
+<p>The alphanumeric loop skips a set of positions held in a constant <code>NSArray</code>. Following the pointers through <code>__objc_arraydata</code> into <code>__objc_intobj</code> gives the exempt indices: 0, 1, 2, 7 and 12, which is exactly the prefix and the two hyphens.</p>
 <p>This contradicted my fragment, whose first three characters were nothing like <code>CM-</code>. For a while I assumed I had misread the XOR loop.</p>
 <pre><code>bl   _objc_msgSend$substringToIndex:
 bl   _objc_msgSend$isEqualToString:      ; &quot;CM-&quot;
@@ -88,15 +93,17 @@ cmp  w0, #0x2d
 b.ne fail</code></pre>
 
 <h2>Details that change the answer</h2>
-<p>The contradiction dissolved on a second reading of <code>stage4_xorBlob:</code>. The first instruction of its loop body is <code>add x2, x21, #4</code>. The counter is offset by four before being used as an index, so the twelve decoded characters occupy positions 4 through 15, not 0 through 11.</p>
-<p>One instruction, and every other constraint agreed with it. That left two unknown positions: index 3 and index 16.</p>
+<p>The contradiction dissolved on a second reading of <code>stage4_xorBlob:</code>. The first instruction of its loop body is <code>add x2, x21, #4</code>. The loop counter is offset by four before being used as an index, so the twelve decoded characters do not start at the beginning of the key. They occupy positions 4 through 15.</p>
+<p>One instruction, and every other constraint suddenly agreed with it. <code>CM-</code> fits in front, the hyphen at index 7 lands between the decoded groups, and the hyphen at index 12 lands where the fragment happens to leave a gap.</p>
+<p>That left two unknown positions: index 3 and index 16.</p>
 <pre><code>index:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
         C  M  -  ?  F  3  A  -  X  9  Z  2  -  K  4  Q  ?
               ^--- stage2      ^--- stage4 covers 4..15</code></pre>
 
 <h2>Stage 3, the last character</h2>
-<p><code>stage3_checksum:</code> sums character codes and compares the total against <code>0x242</code>. The instruction that matters is <code>add x20, x20, #2</code>: the index advances by two, so only characters at even positions contribute. Half the key is invisible to this check.</p>
-<p>Index 16 is even, and by this point it was the only even position still unknown. The known even characters sum to 522, the target is 578, so the missing character is 56, which is ASCII <code>8</code>. No search required.</p>
+<p><code>stage3_checksum:</code> sums character codes and compares the total against <code>0x242</code>. <code>uxtb</code> keeps only the low byte of each character, which is a formality for ASCII input but tells you the author was thinking in bytes.</p>
+<p>The instruction that matters is <code>add x20, x20, #2</code>. The index advances by two, so only characters at even positions contribute to the sum. Half the key is invisible to this check.</p>
+<p>Index 16 is even, and after the previous sections it was the only even position still unknown. The known even characters sum to 522, the target <code>0x242</code> is 578, so the missing character is 56, which is ASCII <code>8</code>. No search required.</p>
 <pre><code>bl   _objc_msgSend$characterAtIndex:
 add  x21, x21, w0, uxtb
 add  x20, x20, #2
@@ -107,8 +114,9 @@ cmp  x21, #0x242
 cset w20, eq</code></pre>
 
 <h2>Stage 5, the rolling hash</h2>
-<p><code>stage5_rollingHash:</code> is an FNV-1a variant with an additive salt. The constants are recognisable on sight: <code>0x811C9DC5</code> and <code>0x01000193</code> are the standard 32-bit FNV offset basis and prime, and <code>0x9E3779B9</code> is the golden-ratio constant. Because the salt advances on every iteration, a character contributes differently depending on where it sits, which makes this a genuine whole-string check rather than another per-character constraint.</p>
-<p>With index 16 resolved, only index 3 was left. I brute-forced it over digits and uppercase letters, and the digit <code>7</code> matched.</p>
+<p><code>stage5_rollingHash:</code> is an FNV-1a variant with an additive salt. The constants are recognisable on sight: <code>0x811C9DC5</code> and <code>0x01000193</code> are the standard 32-bit FNV offset basis and prime, and <code>0x9E3779B9</code> is the 32-bit golden-ratio constant familiar from TEA and from hash mixing generally.</p>
+<p>Because the salt advances on every iteration, the same character contributes a different value depending on where it sits. That defeats position-independent guessing and makes the hash a genuine whole-string check rather than another per-character constraint.</p>
+<p>With index 16 resolved, only index 3 was left. I brute-forced it over digits and uppercase letters, and the digit <code>7</code> produced the expected value.</p>
 <pre><code>h = 0x811C9DC5
 a = 0
 for c in key:
@@ -117,7 +125,8 @@ for c in key:
 h == 0x7DB85890</code></pre>
 
 <h2>Result</h2>
-<p>The key is <code>CM-7F3A-X9Z2-K4Q8</code>. Entering it in the app confirmed it, which was the only time the binary was executed. The solver below contains no search at all, for reasons covered in the next section.</p>
+<p>The key is <code>CM-7F3A-X9Z2-K4Q8</code>. Entering it in the app confirmed it, which was the only time the binary was executed.</p>
+<p>The solver below contains no search at all, for reasons covered in the next section. It derives all 17 characters directly and uses the rolling hash purely as a check.</p>
 <pre><code>blob = [0xEA, 0x9E, 0xEF, 0x82, 0xE8, 0x88, 0xE8, 0x81, 0x99, 0xFE, 0x82, 0xE6]
 
 key = [&quot;?&quot;] * 17
@@ -151,24 +160,33 @@ print(candidate, rolling_hash(candidate) == 0x7DB85890)</code></pre>
 </figure>
 
 <h2>What I missed</h2>
-<p>The brute force in stage 5 was unnecessary. <code>stage4_xorBlob:</code> opens by testing index 3 against a constant, before its loop even starts, and <code>0x37</code> is <code>7</code>. The character I searched for was sitting three instructions above the loop I had read line by line.</p>
-<p>The lesson is about ordering rather than attention. Collect every direct constraint first, then search only what remains. Done that way this crackme needs no search anywhere: stage 2 fixes positions 0, 1, 2, 7 and 12, stage 4 fixes 3 through 15, stage 3 computes 16 arithmetically, and stage 5 is left with nothing to do but agree.</p>
+<p>The brute force in stage 5 was unnecessary. <code>stage4_xorBlob:</code> opens by testing index 3 directly against a constant, before its loop even starts. <code>0x37</code> is <code>7</code>.</p>
+<p>The character I searched for was written in the binary in plain sight, in the function I had studied more carefully than any other. I read that loop line by line and skipped the guard sitting three instructions above it.</p>
+<p>The lesson is about ordering rather than about attention. Collect every direct constraint first, then search only what genuinely remains. Done that way this crackme needs no search anywhere: stage 2 fixes positions 0, 1, 2, 7 and 12, stage 4 fixes 3 through 15, stage 3 computes 16 arithmetically, and stage 5 is left with nothing to do but agree.</p>
 <pre><code>bl   _objc_msgSend$characterAtIndex:   ; index 3
 and  w8, w0, #0xff
 cmp  w8, #0x37
 b.ne fail</code></pre>
 
 <h2>Anti-debugging that never fired</h2>
-<p>The binary contains an <code>AntiDebug</code> class I only looked at after solving the challenge. It asks whether a debugger is attached in three independent ways: <code>ptrace</code> with <code>PT_DENY_ATTACH</code>, resolved through <code>dlsym</code> so that <code>_ptrace</code> never appears in the import table and the call becomes an indirect <code>blr</code>; a <code>sysctl</code> query for the process's own <code>kinfo_proc</code>, testing the <code>P_TRACED</code> bit of <code>p_flag</code>; and a watchdog dispatched at launch that repeats the second check every 2.5 seconds and calls <code>exit(1)</code> on a hit.</p>
+<p>The binary contains an <code>AntiDebug</code> class I only looked at after solving the challenge. It asks one question, whether a debugger is attached, in three independent ways.</p>
+<p>The first is <code>PT_DENY_ATTACH</code>. <code>+[AntiDebug checkPtrace]</code> resolves <code>ptrace</code> through <code>dlsym(RTLD_DEFAULT, &quot;ptrace&quot;)</code> and calls it with request <code>0x1F</code>, which tells the kernel to refuse any attach. The undefined-symbol table confirms the intent: <code>_dlsym</code>, <code>_sysctl</code> and <code>_getpid</code> are imported, <code>_ptrace</code> is not. Searching the import table for <code>ptrace</code>, a standard first check on iOS, finds nothing, and the indirect <code>blr x8</code> also removes the edge from the static call graph.</p>
+<p>The second is <code>P_TRACED</code>. <code>isBeingDebugged</code> takes a completely different route, querying the kernel for its own <code>kinfo_proc</code> through <code>sysctl</code> with mib <code>{CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()}</code> and extracting bit 11 of <code>p_flag</code> with <code>ubfx w0, w8, #0xb, #1</code>. Where <code>PT_DENY_ATTACH</code> forbids attachment, this asks whether attachment has already happened. Defeating one does not defeat the other.</p>
+<p>The third is a watchdog, started from <code>application:didFinishLaunchingWithOptions:</code>, which dispatches an endless loop onto a background queue. This closes the obvious hole in a start-up-only check, since attaching after launch buys at most 2.5 seconds before <code>exit(1)</code>.</p>
 <p>None of it had any effect here, because the binary was never run under a debugger. Anti-debugging sits perpendicular to static analysis: it raises the cost of the dynamic approach and leaves the cost of reading the file exactly where it was.</p>
+<pre><code>sleepForTimeInterval: 2.5
+bl  isBeingDebugged
+cbz w0, loop
+bl  triggerTamperResponse    ; exit(1)</code></pre>
 
 <h2>Takeaway</h2>
 <p>Three things I am taking out of this one.</p>
 <ul>
-  <li>A short-circuit chain of independent checks is a gift to the analyst. Each stage can be solved alone.</li>
+  <li>A short-circuit chain of independent checks is a gift to the analyst. Each stage can be solved alone, and the failures of one do not contaminate the others.</li>
   <li>Read every guard before the loop, not just the loop. My whole search space existed because of one <code>cmp</code> I walked past.</li>
-  <li>Anti-debugging is a statement about the author's threat model, not about the difficulty of the binary. Three mechanisms here, and the cheapest way past all of them was to not run the program.</li>
+  <li>Anti-debugging is orthogonal to static analysis, not a measure of how hard a binary is. Three mechanisms here, and the cheapest way past all of them was to not run the program.</li>
 </ul>
+<p>The protection also says something about intent. Someone who writes a watchdog thread expects to be attacked with a debugger. The cheapest way past all of it was to not run the program at all.</p>
 
 <a class="back" href="../index.html">← all writeups</a>
 
