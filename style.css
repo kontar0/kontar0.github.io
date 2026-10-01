@@ -197,6 +197,8 @@ figcaption {
   width: 100%;
 }
 
+.ai-note { margin: 1.25rem 0 0; font-size: 0.75rem; color: var(--ink-2); text-align: center; }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 @media (max-width: 34rem) {
